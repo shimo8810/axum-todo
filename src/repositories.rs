@@ -1,9 +1,9 @@
+use anyhow::Context;
+use serde::{Deserialize, Serialize};
 use std::{
     collections::HashMap,
-    sync::{Arc, RwLock},
+    sync::{Arc, RwLock, RwLockReadGuard, RwLockWriteGuard},
 };
-
-use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 #[derive(Debug, Error)]
@@ -61,6 +61,14 @@ impl TodoRepositoryForMemory {
             store: Arc::default(),
         }
     }
+
+    fn write_store_ref(&self) -> RwLockWriteGuard<TodoDates> {
+        self.store.write().unwrap()
+    }
+
+    fn read_store_ref(&self) -> RwLockReadGuard<TodoDates> {
+        self.store.read().unwrap()
+    }
 }
 
 impl Default for TodoRepositoryForMemory {
@@ -71,19 +79,92 @@ impl Default for TodoRepositoryForMemory {
 
 impl TodoRepository for TodoRepositoryForMemory {
     fn create(&self, payload: CreateTodo) -> Todo {
-        todo!()
+        let mut store = self.write_store_ref();
+        let id = (store.len() + 1) as i32;
+        let todo = Todo::new(id, payload.text);
+        store.insert(id, todo.clone());
+
+        todo
     }
 
     fn find(&self, id: i32) -> Option<Todo> {
-        todo!()
+        let store = self.read_store_ref();
+        store.get(&id).cloned()
     }
     fn all(&self) -> Vec<Todo> {
-        todo!()
+        let store = self.read_store_ref();
+        store.values().cloned().collect()
     }
     fn update(&self, id: i32, payload: UpdateTodo) -> anyhow::Result<Todo> {
-        todo!()
+        let mut store = self.write_store_ref();
+        let todo = store.get(&id).context(RepositoryError::NotFound(id))?;
+        let text = payload.text.unwrap_or_else(|| todo.text.clone());
+        let completed = payload.completed.unwrap_or(todo.completed);
+
+        let todo = Todo {
+            id,
+            text,
+            completed,
+        };
+
+        store.insert(id, todo.clone());
+
+        Ok(todo)
     }
     fn delete(&self, id: i32) -> anyhow::Result<()> {
-        todo!()
+        let mut store = self.write_store_ref();
+        store.remove(&id).ok_or(RepositoryError::NotFound(id))?;
+
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    #[test]
+    fn todo_crud_scenario() {
+        let text = "todo text".to_string();
+        let id = 1;
+        let expected = Todo::new(id, text.clone());
+
+        // create
+        let repo = TodoRepositoryForMemory::new();
+        let todo = repo.create(CreateTodo { text });
+        assert_eq!(expected, todo);
+
+        // find
+        let todo = repo.find(todo.id).unwrap();
+        assert_eq!(expected, todo);
+
+        // all
+        let todos = repo.all();
+        assert_eq!(vec![expected], todos);
+
+        //update
+        let text = "update todo text".to_string();
+        let todo = repo
+            .update(
+                1,
+                UpdateTodo {
+                    text: Some(text.clone()),
+                    completed: Some(true),
+                },
+            )
+            .expect("failed update todo");
+
+        assert_eq!(
+            Todo {
+                id,
+                text,
+                completed: true
+            },
+            todo
+        );
+
+        // delete
+        let res = repo.delete(id);
+        assert!(res.is_ok());
     }
 }
